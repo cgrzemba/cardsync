@@ -1,5 +1,25 @@
 #!/usr/bin/env python
 # coding: utf-8
+#
+# CDDL HEADER START
+#
+# The contents of this file are subject to the terms of the
+# Common Development and Distribution License (the "License").
+# You may not use this file except in compliance with the License.
+#
+# You can obtain a copy of the license at pkg/OPENSOLARIS.LICENSE
+# or http://www.opensolaris.org/os/licensing.
+# See the License for the specific language governing permissions
+# and limitations under the License.
+#
+# When distributing Covered Code, include this CDDL HEADER in each
+# file and include the License file at pkg/OPENSOLARIS.LICENSE.
+# If applicable, add the following below this CDDL HEADER, with the
+# fields enclosed by brackets "[]" replaced with your own identifying
+# information: Portions Copyright [yyyy] [name of copyright owner]
+#
+# CDDL HEADER END
+#
 ##
 # As long as the Oracle davserver will not support carddav, this script can used 
 # to sync Sun/Oracle CommsSuite Addressbook to carddav server
@@ -8,6 +28,21 @@
 # >>> from Crypto.Cipher import DES
 # >>> cr = DES.new('cardsync',DES.MODE_ECB)
 # >>> base64.b64decode(cr.encrypt(passwd)) rpadded with space
+# sample config file:
+'''
+[DAVICAL]
+user: admin
+passwd: xxxxxxxxx=
+davurl: http://davical.domain.lan/caldav.php
+carddavuri: %s/%s/addresses/%s.ics
+
+[LDAP]
+binddn: cn=Directory Manager
+bindcred: xxxxxxxx=
+ldapurl: ldap://davical.domain.lan:389
+timeframe: 24
+'''
+# timeframe - is the time in hours for how long it will look in the past for changes
 # it use vobject for handle vcard data and requests for communicate with carddavserver
 # for Solaris all modules can downloaded from http://www.opencsw.org
 ##
@@ -133,7 +168,7 @@ def syncEntry(ldapconn, dn, willChange, changeTime, modtype):
                 # vc.prettyPrint()
 
     except ldap.NO_SUCH_OBJECT:
-        print "ERROR: Not found: (%s) %s" % (attr['changetype'], attr['targetdn'][0])
+        print "ERROR: Not found: (%s) %s" % (modtype, dn)
 
 ##
 # read the LDAP changelog and sync changes to carddav server
@@ -176,8 +211,8 @@ def syncAll(name):
 ##
 # print usage
 def usage():
-    hlp='''useage: cardsync.py [-i|--init <username>]|[-d|--update]
-    option 'i' and 'd' are mutual exclusive
+    hlp='''useage: cardsync.py [-i|--init <username>]|[-u|--update]
+    option 'i' and 'u' are mutual exclusive
 '''
     print hlp
     sys.exit( 2 )
@@ -187,17 +222,18 @@ def usage():
 def parseCmdlineArgs():
     try:
         opts, args = getopt.getopt( sys.argv[1:],
-            "i:d", [ "init=",'update'] )
+            "i:u", [ "init=",'update'] )
     except getopt.GetoptError:
         usage()
      
     args = {}
     args[ "init" ] = ""
+    args['update'] = False
 
     for o, a in opts:
        if o in ("-i", "--init"):
             args[ "init" ] = a
-       if o in ("-d", '--update'):
+       if o in ("-u", '--update'):
             args[ "update" ] = True
 
     return args
@@ -217,7 +253,7 @@ davurl    = cf.get('DAVICAL','davurl')
 carddavurl = cf.get('DAVICAL','carddavuri')
 
 args = parseCmdlineArgs()
-if  not args["init"] or args['update']:
+if  args["init"]=='' and not args['update']:
     usage()
 
 if args['init']:
