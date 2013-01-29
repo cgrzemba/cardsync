@@ -35,6 +35,7 @@ user: admin
 passwd: xxxxxxxxx=
 davurl: http://davical.domain.lan/caldav.php
 carddavuri: %s/%s/addresses/%s.ics
+loglevel: 30
 
 [LDAP]
 binddn: cn=Directory Manager
@@ -58,11 +59,15 @@ import getopt
 import sys
 from Crypto.Cipher import DES
 from base64 import b64encode, b64decode
+import logging
 
 headers = {"User-Agent": "CardSync"}
 headers['content-type'] = "text/vcard; charset='utf-8'"
 # headers['If-None-Match'] = '*'
 haveChanged = []
+FORMAT = '%(asctime)-15s %(message)s'
+logging.basicConfig(format=FORMAT)
+
 
 ##
 # add Email line to vcard
@@ -96,79 +101,88 @@ def addTel(vc,no,attr,idx):
 # @param willChange list of modified/added entries
 # @param changeTime time of modify in LDAP, will used for generate the REV line
 # @param modtype create or modify, not used yet, allways add
-def syncEntry(ldapconn, dn, willChange, changeTime, modtype):
+def syncEntry(ldapconn, cdn, willChange, changeTime, modtype):
     try: 
-        abe = ldapconn.search_s(dn,ldap.SCOPE_BASE,'objectclass=piTypePerson')
-        for dn, attr in abe:
-#                        print attr
-            owner = dn.split(',')[1].split('=')[1]
-            entry = attr['piEntryID'][0]
-            if entry not in willChange:
-                willChange.append(entry)
-                print carddavurl % (davurl,owner,entry)
-                vc = vobject.vCard()
-                gn = attr['givenName'][0] if 'givenName' in attr.keys() else ''
-                sn = attr['sn'][0] if 'sn' in attr.keys() else attr['displayName'][0]
-                vc.add('n')
-                vc.n.value = vobject.vcard.Name(family=sn.decode('utf-8'),given=gn.decode('utf-8'))
-                vc.add('fn')
-                vc.fn.value = attr['displayName'][0].decode('utf-8')
-                vc.add('uid')
-                vc.uid.value = attr['memberOfPIBook'][0]+'-'+attr['piEntryID'][0]
-                j = 0
-                for i in range(3):
-                    try:
-                        j = addEmail(vc,attr['piEmail'+str(i+1)][0],attr['piEmail'+str(i+1)+'Type'][0],j)
-                    except KeyError:
-                        pass
-                try:
-                    d = attr['company'][0]
-                    vc.add('org')
-                    vc.org.value = [ attr['company'][0].decode('utf-8').replace(',','\,') ]
-                except KeyError:
-                    pass
-                j = 0
-                for i in range(6):
-                    try:
-                        j = addTel(vc,attr['piPhone'+str(i+1)][0],attr['piPhone'+str(i+1)+'Type'][0],j)
-                    except KeyError:
-                        pass
-                j = 0
-                try:
-                    d = attr['workCity'][0]
-                    vc.add('adr')
-                    street = attr['workPostalAddress'][0].decode('utf-8') if 'workPostalAddress' in attr.keys() else ''
-                    plz = attr['workPostalCode'][0] if 'workPostalCode' in attr.keys() else ''
-                    state = attr['workState'][0].decode('utf-8') if 'workState' in attr.keys() else ''
-                    country = attr['workCountry'][0].decode('utf-8') if 'workCountry' in attr.keys() else ''
-                    vc.adr.value = vobject.vcard.Address(street,attr['workCity'][0].decode('utf-8'),state,plz,country,'','')
-                    vc.adr.type_param = 'WORK'
-                    j = 1
-                except KeyError:
-                    pass
-                try:
-                    d = attr['homeCity'][0]
-                    vc.add('adr')
-                    street = attr['homePostalAddress'][0].decode('utf-8') if 'homePostalAddress' in attr.keys() else ''
-                    plz = attr['homePostalCode'][0] if 'homePostalCode' in attr.keys() else ''
-                    state = attr['homeState'][0].decode('utf-8') if 'homeState' in attr.keys() else ''
-                    country = attr['homeCountry'][0].decode('utf-8') if 'homeCountry' in attr.keys() else ''
-                    vc.adr_list[j].value = vobject.vcard.Address(street,attr['homeCity'][0].decode('utf-8'),state,plz,country,'','')
-                    vc.adr_list[j].type_param = 'HOME'
-                except KeyError:
-                    pass
-                vc.add('rev')
-                vc.rev.value = changeTime
+        if modtype in ('delete'):
+            owner = cdn.split(',')[1].split('=')[1]
+            entry = cdn.split(',')[0].split('=')[1]
+            url = carddavurl % (davurl,owner,entry)
+            log.debug( "try to delete %s" % url )
+            resp = s.delete(url)
+            log.info('delete %s  returns: %s' %(url,resp.reason))
 
-                vcard=vc.serialize()  
-                response = requests.put(carddavurl % (davurl,owner,entry), data=vcard, headers=headers, auth=(user, passwd))
-                if (response.status_code and 200) == 200:
-                    haveChanged.append(entry)
-                print response.status_code
-                # vc.prettyPrint()
+        else:   
+            abe = ldapconn.search_s(cdn,ldap.SCOPE_BASE,'objectclass=piTypePerson')
+            for dn, attr in abe:
+                owner = dn.split(',')[1].split('=')[1]
+                entry = attr['piEntryID'][0]
+                if entry not in willChange:
+                    willChange.append(entry)
+                    log.info("modify URL %s" % (carddavurl % (davurl,owner,entry)))
+
+                    vc = vobject.vCard()
+                    gn = attr['givenName'][0] if 'givenName' in attr.keys() else ''
+                    sn = attr['sn'][0] if 'sn' in attr.keys() else attr['displayName'][0]
+                    vc.add('n')
+                    vc.n.value = vobject.vcard.Name(family=sn.decode('utf-8'),given=gn.decode('utf-8'))
+                    vc.add('fn')
+                    vc.fn.value = attr['displayName'][0].decode('utf-8')
+                    vc.add('uid')
+                    vc.uid.value = attr['memberOfPIBook'][0]+'-'+attr['piEntryID'][0]
+                    j = 0
+                    for i in range(3):
+                        try:
+                            j = addEmail(vc,attr['piEmail'+str(i+1)][0],attr['piEmail'+str(i+1)+'Type'][0],j)
+                        except KeyError:
+                            pass
+                    try:
+                        d = attr['company'][0]
+                        vc.add('org')
+                        vc.org.value = [ attr['company'][0].decode('utf-8').replace(',','\,') ]
+                    except KeyError:
+                        pass
+                    j = 0
+                    for i in range(6):
+                        try:
+                            j = addTel(vc,attr['piPhone'+str(i+1)][0],attr['piPhone'+str(i+1)+'Type'][0],j)
+                        except KeyError:
+                            pass
+                    j = 0
+                    try:
+                        d = attr['workCity'][0]
+                        vc.add('adr')
+                        street = attr['workPostalAddress'][0].decode('utf-8') if 'workPostalAddress' in attr.keys() else ''
+                        plz = attr['workPostalCode'][0] if 'workPostalCode' in attr.keys() else ''
+                        state = attr['workState'][0].decode('utf-8') if 'workState' in attr.keys() else ''
+                        country = attr['workCountry'][0].decode('utf-8') if 'workCountry' in attr.keys() else ''
+                        vc.adr.value = vobject.vcard.Address(street,attr['workCity'][0].decode('utf-8'),state,plz,country,'','')
+                        vc.adr.type_param = 'WORK'
+                        j = 1
+                    except KeyError:
+                        pass
+                    try:
+                        d = attr['homeCity'][0]
+                        vc.add('adr')
+                        street = attr['homePostalAddress'][0].decode('utf-8') if 'homePostalAddress' in attr.keys() else ''
+                        plz = attr['homePostalCode'][0] if 'homePostalCode' in attr.keys() else ''
+                        state = attr['homeState'][0].decode('utf-8') if 'homeState' in attr.keys() else ''
+                        country = attr['homeCountry'][0].decode('utf-8') if 'homeCountry' in attr.keys() else ''
+                        vc.adr_list[j].value = vobject.vcard.Address(street,attr['homeCity'][0].decode('utf-8'),state,plz,country,'','')
+                        vc.adr_list[j].type_param = 'HOME'
+                    except KeyError:
+                        pass
+                    vc.add('rev')
+                    vc.rev.value = changeTime
+    
+                    vcard=vc.serialize()  
+                    response = s.put(carddavurl % (davurl,owner,entry), data=vcard)
+                    if (response.status_code and 200) == 200:
+                        haveChanged.append(entry)
+                    log.info ("card add returned %d" % response.status_code) 
+                    # vc.prettyPrint()
 
     except ldap.NO_SUCH_OBJECT:
-        print "ERROR: Not found: (%s) %s" % (modtype, dn)
+        log.error( "Not found: (%s) %s" % (modtype, dn))
 
 ##
 # read the LDAP changelog and sync changes to carddav server
@@ -177,12 +191,14 @@ def syncLdapChanges():
     c = ldap.initialize(ldapurl)
     c.bind(binddn,bindcred)
     changes = c.search_s('cn=changelog',ldap.SCOPE_SUBTREE,'(objectclass=changelogentry)',['targetdn','changetype','changetime'])
+    log.debug('will process changes since %s', str(datetime.now() - timedelta(hours=timeframe)))
     for dn,clattr in changes:
-        if datetime.strptime(clattr['changetime'][0],'%Y%m%d%H%M%SZ') > datetime.now() - timedelta(hours=timeframe) and clattr['changetype'][0] != 'delete':
+#        log.debug('cl entry <%s>' % dn)
+#        log.debug("change log entry: %s time %s type %s" % (clattr['targetdn'][0],clattr['changetime'][0], clattr['changetype'][0]))
+        if datetime.strptime(clattr['changetime'][0],'%Y%m%d%H%M%SZ') > (datetime.now() - timedelta(hours=timeframe)):
             if  re.split('.*,',clattr['targetdn'][0])[1].lower() == 'o=piserverdb':
+                log.debug("process entry: %s time %s type %s" % (clattr['targetdn'][0],clattr['changetime'][0], clattr['changetype'][0]))
                 syncEntry(c,clattr['targetdn'][0],willChange, clattr['changetime'][0],clattr['changetype'][0])
-    
-    #    print clattr['changetime'][0], clattr['changetype'][0]
     
 
 ##
@@ -192,7 +208,7 @@ def syncAll(name):
     willChange = []
     c = ldap.initialize(ldapurl)
     c.bind(binddn,bindcred)
-#    print 'search: (&(objectclass=inetorgperson)(uid=%s))' % name
+    log.debug ( 'search: (&(objectclass=inetorgperson)(uid=%s))' % name )
     entry = c.search_s('dc=contac,dc=lan',ldap.SCOPE_SUBTREE,'(&(objectclass=inetorgperson)(uid=%s))' % name,['psroot'])
     try:
         for dn,abattr in entry:
@@ -206,12 +222,12 @@ def syncAll(name):
                 print "No Addressbook for %s" % name
 
     except KeyError:
-        print 'PSROOT NOT FOUND: %s?%s?&(objectclass=inetorgperson)(uid=%s))?%s' % (ldapurl,ldap.SCOPE_SUBTREE,name,['psroot'])
+        log.error( 'PSROOT NOT FOUND: %s?%s?&(objectclass=inetorgperson)(uid=%s))?%s' % (ldapurl,ldap.SCOPE_SUBTREE,name,['psroot']))
 
 ##
 # print usage
 def usage():
-    hlp='''useage: cardsync.py [-i|--init <username>]|[-u|--update]
+    hlp='''usage: cardsync.py [-i|--init <username>]|[-u|--update]
     option 'i' and 'u' are mutual exclusive
 '''
     print hlp
@@ -239,10 +255,11 @@ def parseCmdlineArgs():
     return args
 
  
+log = logging.getLogger('cardsync')
 # read config
 cf = ConfigParser.ConfigParser()
 cr = DES.new('cardsync',DES.MODE_ECB)
-cf.read('cardsync.cfg')
+cf.read('/home/davical/cardsync.cfg')
 binddn    = cf.get('LDAP','binddn')
 bindcred  = cr.decrypt(b64decode(cf.get('LDAP','bindcred'))).rstrip()
 ldapurl   = cf.get('LDAP','ldapurl')
@@ -251,11 +268,22 @@ user      = cf.get('DAVICAL','user')
 passwd  = cr.decrypt(b64decode(cf.get('DAVICAL','passwd'))).rstrip()
 davurl    = cf.get('DAVICAL','davurl')
 carddavurl = cf.get('DAVICAL','carddavuri')
+try:
+  dbglvl = cf.get('DAVICAL','loglevel')
+except ConfigParser.NoOptionError:
+  dbglvl = 30 # WARNING
+
+log.setLevel(dbglvl)
+log.debug(" start ... ")
 
 args = parseCmdlineArgs()
 if  args["init"]=='' and not args['update']:
+    log.info('parameter error')    
     usage()
 
+s = requests.session()
+s.auth = (user,passwd)
+s.headers = headers
 if args['init']:
     syncAll(args['init'])
     sys.exit(0);
@@ -264,6 +292,7 @@ if args['update']:
     syncLdapChanges()
     sys.exit(0)
     
+log.info('parameter error')    
 usage()
 
 
