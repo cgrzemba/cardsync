@@ -17,4 +17,4 @@ For continuous sync add a line in crontab like:
 0 * * * * cardsync -u
 
 Limitations:
-At the moment no syncing back to the CommSuite Addressbook and no deletion of vcards.
+At the moment no syncing back to the CommSuite Addressbook.
