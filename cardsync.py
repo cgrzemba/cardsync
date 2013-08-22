@@ -35,7 +35,8 @@ user: admin
 passwd: xxxxxxxxx=
 davurl: http://davical.domain.lan/caldav.php
 carddavuri: %s/%s/addresses/%s.ics
-loglevel: 30
+loglevel: WARNING
+logname: /var/log/cardsync.log
 
 [LDAP]
 binddn: cn=Directory Manager
@@ -61,13 +62,12 @@ from Crypto.Cipher import DES
 from base64 import b64encode, b64decode
 import logging
 
+cfgfname = '/home/davical/cardsync.cfg'
 headers = {"User-Agent": "CardSync"}
 headers['content-type'] = "text/vcard; charset='utf-8'"
 # headers['If-None-Match'] = '*'
 haveChanged = []
-FORMAT = '%(asctime)-15s %(message)s'
-logging.basicConfig(format=FORMAT)
-
+FORMAT = '%(asctime)-15s %(name)s %(levelname)s: %(message)s'
 
 ##
 # add Email line to vcard
@@ -195,7 +195,7 @@ def syncLdapChanges():
     for dn,clattr in changes:
 #        log.debug('cl entry <%s>' % dn)
 #        log.debug("change log entry: %s time %s type %s" % (clattr['targetdn'][0],clattr['changetime'][0], clattr['changetype'][0]))
-        if datetime.strptime(clattr['changetime'][0],'%Y%m%d%H%M%SZ') > (datetime.now() - timedelta(hours=timeframe)):
+        if datetime.strptime(clattr['changetime'][0],'%Y%m%d%H%M%SZ') > (datetime.utcnow() - timedelta(hours=timeframe)):
             if  re.split('.*,',clattr['targetdn'][0])[1].lower() == 'o=piserverdb':
                 log.debug("process entry: %s time %s type %s" % (clattr['targetdn'][0],clattr['changetime'][0], clattr['changetype'][0]))
                 syncEntry(c,clattr['targetdn'][0],willChange, clattr['changetime'][0],clattr['changetype'][0])
@@ -259,7 +259,7 @@ log = logging.getLogger('cardsync')
 # read config
 cf = ConfigParser.ConfigParser()
 cr = DES.new('cardsync',DES.MODE_ECB)
-cf.read('/home/davical/cardsync.cfg')
+cf.read(cfgfname)
 binddn    = cf.get('LDAP','binddn')
 bindcred  = cr.decrypt(b64decode(cf.get('LDAP','bindcred'))).rstrip()
 ldapurl   = cf.get('LDAP','ldapurl')
@@ -271,9 +271,14 @@ carddavurl = cf.get('DAVICAL','carddavuri')
 try:
   dbglvl = cf.get('DAVICAL','loglevel')
 except ConfigParser.NoOptionError:
-  dbglvl = 30 # WARNING
+  dbglvl = 'WARNING'
+try:
+  logging.basicConfig(format=FORMAT,filename=cf.get('DAVICAL','logname'))
+except ConfigParser.NoOptionError:
+  logging.basicConfig(format=FORMAT)
 
-log.setLevel(dbglvl)
+log = logging.getLogger('cardsync')
+log.setLevel(getattr(logging,dbglvl.upper()))
 log.debug(" start ... ")
 
 args = parseCmdlineArgs()
